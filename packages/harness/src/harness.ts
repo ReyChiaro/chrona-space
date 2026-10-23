@@ -61,8 +61,9 @@ export class Harness {
   private readonly store?: WorldStore;
   private readonly profileId: string;
   private readonly spec: ClipSpec;
-  private readonly params: RenderParams;
-  private readonly overlapFrames: number;
+  private paramsValue: RenderParams;
+  private overlapValue: number;
+  private sampleStrideValue = 8;
   private readonly captureFrame?: HarnessOptions['captureFrame'];
 
   private editSeq = 0;
@@ -79,8 +80,8 @@ export class Harness {
     this.store = options.store;
     this.profileId = options.profileId ?? 'stub-profile';
     this.spec = options.spec ?? DEFAULT_CLIP_SPEC;
-    this.params = options.params ?? DEFAULT_RENDER_PARAMS;
-    this.overlapFrames = options.overlapFrames ?? 48;
+    this.paramsValue = { ...(options.params ?? DEFAULT_RENDER_PARAMS) };
+    this.overlapValue = options.overlapFrames ?? 48;
     this.captureFrame = options.captureFrame;
     this.recorder = new Recorder(options.world);
   }
@@ -90,7 +91,28 @@ export class Harness {
   }
 
   get renderParams(): RenderParams {
-    return this.params;
+    return this.paramsValue;
+  }
+
+  get overlapFrames(): number {
+    return this.overlapValue;
+  }
+
+  get sampleStride(): number {
+    return this.sampleStrideValue;
+  }
+
+  /** Live-updated from the parameter panel; affects the next clip only. */
+  setParams(patch: Partial<RenderParams>): void {
+    this.paramsValue = { ...this.paramsValue, ...patch };
+  }
+
+  setOverlapFrames(frames: number): void {
+    this.overlapValue = Math.max(0, Math.min(this.spec.frames - 1, Math.round(frames)));
+  }
+
+  setSampleStride(stride: number): void {
+    this.sampleStrideValue = Math.max(1, Math.round(stride));
   }
 
   /** Create (or modify) one asset from natural language. */
@@ -218,7 +240,7 @@ export class Harness {
 
   stopRecording(): Segment[] {
     const session = this.recorder.stop();
-    return segmentSession(session, this.spec, this.overlapFrames, `clip_${this.worldId}`);
+    return segmentSession(session, this.spec, this.overlapValue, `clip_${this.worldId}`);
   }
 
   /** Build the structured request for a segment (no prompt text, no model). */
@@ -227,7 +249,7 @@ export class Harness {
       worldId: this.worldId,
       profileId: this.profileId,
       spec: this.spec,
-      params: this.params,
+      params: this.paramsValue,
       previous,
     });
   }
@@ -241,7 +263,7 @@ export class Harness {
 
   /** Record the clip's frames into viewpoint memory (D-08). */
   private rememberSegment(segment: Segment, result: ClipResult): void {
-    const stride = 8;
+    const stride = this.sampleStrideValue;
     for (let i = 0; i < segment.frames.length; i += stride) {
       const frame = segment.frames[i];
       const index = result.frameIndex.find((entry) => entry.frameIdx === frame.frameId) ?? result.frameIndex[0];

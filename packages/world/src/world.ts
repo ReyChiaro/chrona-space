@@ -166,6 +166,11 @@ export class World {
     return nodeId;
   }
 
+  /** Snapshot of bound nodes, used by maps and debugging panels. */
+  listNodes(): WorldNode[] {
+    return [...this.nodes.values()].map((bound) => bound.node);
+  }
+
   removeNode(nodeId: NodeId): void {
     const bound = this.nodes.get(nodeId);
     if (!bound) return;
