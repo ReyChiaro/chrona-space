@@ -1,0 +1,15 @@
+{
+  "name": "@chrona/storage",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@chrona/protocol": "workspace:*",
+    "@chrona/world": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./fs": "./src/fs.ts"
+  }
+}

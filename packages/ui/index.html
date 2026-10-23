@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chrona</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="view"></canvas>
+      <div id="hud">
+        <span id="rec-dot"></span>
+        <span id="rec-time">00:00.0</span>
+        <span id="rec-seg">· 预计 1 段</span>
+      </div>
+      <div id="hint">WASD 移动 · 鼠标视角 · R 录制 · E 地形预览 · L 日志</div>
+      <div id="renderwin">
+        <video id="clip" muted loop playsinline></video>
+        <div id="renderwin-empty">尚未生成</div>
+        <div id="badge">STUB · 未接模型</div>
+      </div>
+      <div id="previewbar">左键确认 · Esc 取消</div>
+      <div id="log">
+        <div id="log-body"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "@chrona/ui",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { "dev": "vite --port 5173", "build": "vite build", "preview": "vite preview" },
+  "dependencies": {
+    "@chrona/protocol": "workspace:*",
+    "@chrona/world": "workspace:*",
+    "@chrona/storage": "workspace:*",
+    "@chrona/harness": "workspace:*",
+    "@chrona/services": "workspace:*",
+    "three": "^0.180.0",
+    "@dimforge/rapier3d-compat": "^0.18.0"
+  },
+  "devDependencies": { "vite": "^7.0.0" }
+}

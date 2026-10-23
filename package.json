@@ -1,0 +1,30 @@
+{
+  "name": "chrona-space",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @chrona/ui dev",
+    "build": "pnpm --filter @chrona/ui build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test tests/unit/*.test.ts",
+    "test:py": "cd services/video-generator && uv run python -m unittest discover -s tests",
+    "cli": "node --import tsx packages/cli/src/main.ts",
+    "lint:py": "cd services/video-generator && uv run ruff check .",
+    "fmt:py": "cd services/video-generator && uv run ruff format ."
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/three": "^0.186.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "@chrona/protocol": "workspace:*",
+    "@chrona/world": "workspace:*",
+    "@chrona/storage": "workspace:*",
+    "@chrona/harness": "workspace:*",
+    "@chrona/services": "workspace:*"
+  }
+}

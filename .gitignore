@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[oc]
+.venv/
+services/*/.venv/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+
+# Node
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+*.log
+
+# 构建 / 运行时产物（本地检查用，不入库）
+worlds/
+tests/
+.uv-cache/
+.uv/
+
+# 凭据
+.env
+.env.local
+
+# 内部设计文档（不同步到远程）
+docs/
+
+.DS_Store

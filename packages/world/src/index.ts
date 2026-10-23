@@ -1,0 +1,11 @@
+export { TerrainField, DEFAULT_TERRAIN } from './terrain.js';
+export type { TerrainConfig } from './terrain.js';
+export { ChunkManager, chunkIdOf, chunkOrigin, parseChunkId } from './chunk.js';
+export type { ChunkRecord, ChunkHooks, ChunkGridOptions } from './chunk.js';
+export { PhysicsWorld } from './physics.js';
+export type { RayHit } from './physics.js';
+export { World, NO_INPUT } from './world.js';
+export type { InputState, WorldOptions, WorldHooks } from './world.js';
+export { instantiateAsset, countTriangles, computeBounds } from './asset-runtime.js';
+export type { RuntimeAsset, AssetContext } from './asset-runtime.js';
+export { fbm2D, ridged2D, valueNoise2D, hashString } from './noise.js';

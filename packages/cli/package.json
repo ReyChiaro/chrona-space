@@ -1,0 +1,14 @@
+{
+  "name": "@chrona/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "chrona": "./src/main.ts" },
+  "dependencies": {
+    "@chrona/protocol": "workspace:*",
+    "@chrona/world": "workspace:*",
+    "@chrona/storage": "workspace:*",
+    "@chrona/harness": "workspace:*",
+    "@chrona/services": "workspace:*",
+    "tsx": "^4.20.0"
+  }
+}
