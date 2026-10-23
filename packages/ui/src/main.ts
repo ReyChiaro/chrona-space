@@ -595,7 +595,7 @@ async function boot(): Promise<void> {
       default:
         break;
     }
-    syncDock();
+    if (event.code.startsWith('Key') || event.code === 'Escape' || event.code === 'Backspace') syncDock();
   });
   window.addEventListener('keyup', (event) => keys.delete(event.code));
 
@@ -651,12 +651,17 @@ async function boot(): Promise<void> {
     camera.position.set(state.pos.x, state.pos.y, state.pos.z);
     camera.quaternion.set(state.quat.x, state.quat.y, state.quat.z, state.quat.w);
 
-    // Display pass includes the preview layer; capture pass never does.
+    // Display pass includes the preview layer.
     previewLayer.visible = true;
     renderer.render(scene, camera);
-    previewLayer.visible = false;
-    captureRenderer.render(scene, camera);
-    previewLayer.visible = true;
+
+    // Capture pass only runs while recording: it is a second full-resolution
+    // render and was one of the main causes of frame drops.
+    if (harness.recorder.isRecording) {
+      previewLayer.visible = false;
+      captureRenderer.render(scene, camera);
+      previewLayer.visible = true;
+    }
 
     if (outline) outline.update();
     if (windows.isOpen('map2d')) map2d.draw();

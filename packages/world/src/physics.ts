@@ -15,6 +15,7 @@ export interface RayHit {
 export class PhysicsWorld {
   private readonly world: RAPIER.World;
   private readonly nodeByCollider = new Map<number, string>();
+  private dirty = false;
 
   private constructor(world: RAPIER.World) {
     this.world = world;
@@ -51,11 +52,12 @@ export class PhysicsWorld {
       z: size,
     });
     this.world.createCollider(desc, body);
+    this.dirty = true;
   }
 
-  /** Attach colliders for an asset instance. */
-  addAsset(nodeId: string, colliders: ColliderSpec[], position: Vec3, rotationY: number): void {
-    if (colliders.length === 0) return;
+  /** Attach colliders for an asset instance; returns the body handle. */
+  addAsset(nodeId: string, colliders: ColliderSpec[], position: Vec3, rotationY: number): number | undefined {
+    if (colliders.length === 0) return undefined;
     const body = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.fixed()
         .setTranslation(position.x, position.y, position.z)
@@ -67,6 +69,19 @@ export class PhysicsWorld {
       const handle = this.world.createCollider(desc, body).handle;
       this.nodeByCollider.set(handle, nodeId);
     }
+    this.dirty = true;
+    return body.handle;
+  }
+
+  /** Drop a body (node removal or asset swap). */
+  removeBody(handle: number): void {
+    const body = this.world.getRigidBody(handle);
+    if (!body) return;
+    for (let i = 0; i < body.numColliders(); i += 1) {
+      this.nodeByCollider.delete(body.collider(i).handle);
+    }
+    this.world.removeRigidBody(body);
+    this.dirty = true;
   }
 
   castRay(origin: Vec3, direction: Vec3, maxDistance: number): RayHit | null {
@@ -90,10 +105,15 @@ export class PhysicsWorld {
     };
   }
 
-  /** Rapier needs a step before queries observe freshly created colliders. */
-  step(dt: number): void {
-    this.world.timestep = Math.min(dt, 1 / 30);
+  /**
+   * Rapier only sees new colliders after a step. The world is static in v1, so
+   * we step once per change instead of every frame.
+   */
+  flushQueries(): void {
+    if (!this.dirty) return;
+    this.world.timestep = 1 / 60;
     this.world.step();
+    this.dirty = false;
   }
 
   dispose(): void {

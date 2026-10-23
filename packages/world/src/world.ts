@@ -56,6 +56,7 @@ interface BoundNode {
   object3d: THREE.Object3D;
   bundle: AssetBundle;
   chunkId?: ChunkId;
+  bodyHandle?: number;
 }
 
 const WALK_SPEED = 2.1;
@@ -158,7 +159,7 @@ export class World {
     });
     runtime.object3d.name = nodeId;
     this.sceneRoot.add(runtime.object3d);
-    this.physics?.addAsset(nodeId, runtime.colliders, position, rotationY);
+    const bodyHandle = this.physics?.addAsset(nodeId, runtime.colliders, position, rotationY);
 
     const node: WorldNode = {
       id: nodeId,
@@ -174,7 +175,7 @@ export class World {
       chunkId: chunkIdOf(position.x, position.z),
       bounds: runtime.bounds,
     };
-    this.nodes.set(nodeId, { node, object3d: runtime.object3d, bundle, chunkId: node.chunkId });
+    this.nodes.set(nodeId, { node, object3d: runtime.object3d, bundle, chunkId: node.chunkId, bodyHandle });
     return nodeId;
   }
 
@@ -193,6 +194,7 @@ export class World {
     const bound = this.nodes.get(nodeId);
     if (!bound) return false;
     const { pos, quat } = bound.node.transform;
+    if (bound.bodyHandle !== undefined) this.physics?.removeBody(bound.bodyHandle);
     const rotationY = Math.atan2(2 * (quat.w * quat.y + quat.x * quat.z), 1 - 2 * (quat.y * quat.y + quat.z * quat.z));
 
     this.sceneRoot.remove(bound.object3d);
@@ -210,6 +212,7 @@ export class World {
     this.sceneRoot.add(runtime.object3d);
 
     bound.object3d = runtime.object3d;
+    bound.bodyHandle = this.physics?.addAsset(nodeId, runtime.colliders, pos, rotationY);
     bound.bundle = bundle;
     bound.node.assetRef = { assetId: bundle.assetId, version: bundle.version };
     bound.node.semantic = bundle.semantic;
@@ -220,6 +223,7 @@ export class World {
   removeNode(nodeId: NodeId): void {
     const bound = this.nodes.get(nodeId);
     if (!bound) return;
+    if (bound.bodyHandle !== undefined) this.physics?.removeBody(bound.bodyHandle);
     this.sceneRoot.remove(bound.object3d);
     bound.object3d.traverse((child) => {
       if (child instanceof THREE.Mesh) child.geometry.dispose();
@@ -262,7 +266,7 @@ export class World {
     }
 
     this.chunks.update(this.position);
-    this.physics?.step(dt);
+    this.physics?.flushQueries();
   }
 
   /** Frame emitted by the game camera. Pixel payload is attached by the renderer. */
@@ -367,15 +371,33 @@ export class World {
     return null;
   }
 
+  /** Highest surface under the player, from the floor to anything standable. */
   private groundHeightAt(x: number, z: number): number {
-    const down = this.physics?.castRay({ x, y: this.position.y + 2, z }, { x: 0, y: -1, z: 0 }, 4);
-    if (down && down.distance < 4) return down.point.y;
+    const originY = this.position.y + 1.2;
+    const hit = this.physics?.castRay({ x, y: originY, z }, { x: 0, y: -1, z: 0 }, 3);
+    if (hit && hit.distance > 0.02) return hit.point.y;
     return this.terrain.heightAt(x, z);
   }
 
-  /** Very coarse walkability: blocks only where an asset collider sits above the floor. */
+  /**
+   * Horizontal body probe. A downward ray would hit the floor the player is
+   * standing on — that froze movement and caused the stutter seen in v1.
+   */
   private isFree(x: number, z: number): boolean {
-    const probe = this.physics?.castRay({ x, y: this.position.y + 1.2, z }, { x: 0, y: -1, z: 0 }, 1.2);
-    return !probe;
+    const dx = x - this.position.x;
+    const dz = z - this.position.z;
+    const distance = Math.hypot(dx, dz);
+    if (distance < 1e-6) return true;
+    const direction = { x: dx / distance, y: 0, z: dz / distance };
+    const radius = 0.32;
+    for (const height of [0.3, 0.75, 1.15]) {
+      const hit = this.physics?.castRay(
+        { x: this.position.x, y: this.position.y + height, z: this.position.z },
+        direction,
+        distance + radius,
+      );
+      if (hit) return false;
+    }
+    return true;
   }
 }
