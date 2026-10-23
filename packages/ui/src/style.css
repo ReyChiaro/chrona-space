@@ -10,7 +10,8 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   font: 13px/1.5 -apple-system, "PingFang SC", Inter, sans-serif; overflow: hidden; }
-#view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+#view { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; display: block;
+  transition: width .25s ease; }
 
 /* ---------- crosshair ---------- */
 #crosshair {
@@ -135,6 +136,21 @@ input[type='range']::-webkit-slider-thumb { -webkit-appearance: none; width: 10p
 .switch { min-width: 40px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--stroke);
   background: rgba(255, 255, 255, .05); color: var(--dim); font: inherit; font-size: 11px; cursor: pointer; }
 .switch.on { background: var(--accent); border-color: transparent; color: #1a1220; font-weight: 600; }
+
+/* toasts */
+#toasts { position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 8px; align-items: center; z-index: 300;
+  pointer-events: none; }
+.toast {
+  padding: 8px 16px; border-radius: 999px; background: var(--panel);
+  border: 1px solid var(--stroke); backdrop-filter: blur(16px);
+  font-size: 12px; color: var(--text); box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  animation: toast-in .18s ease-out; max-width: 60vw; text-align: center;
+}
+.toast.success { border-color: rgba(126, 217, 173, .45); }
+.toast.error { border-color: rgba(240, 138, 138, .55); color: #ffd9d9; }
+.toast.leaving { opacity: 0; transform: translateY(-4px); transition: .2s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 
 /* dock */
 #dock { position: fixed; right: 20px; bottom: 20px; display: flex; gap: 6px; z-index: 200; }

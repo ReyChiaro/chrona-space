@@ -10,6 +10,10 @@ const SURFACE_FILL: Record<SurfaceClass, string> = {
   sidewalk: '#6a6a66',
 };
 
+function yawOf(quat: { x: number; y: number; z: number; w: number }): number {
+  return Math.atan2(2 * (quat.w * quat.y + quat.x * quat.z), 1 - 2 * (quat.y * quat.y + quat.z * quat.z));
+}
+
 export interface Map2D {
   draw(): void;
   destroy(): void;
@@ -124,9 +128,23 @@ export function createMap2D(canvas: HTMLCanvasElement, world: World, onTeleport:
 
     for (const node of world.listNodes()) {
       const [sx, sy] = toScreen(node.transform.pos.x, node.transform.pos.z);
+      if (node.bounds) {
+        const width = (node.bounds.max.x - node.bounds.min.x) * scale;
+        const depth = (node.bounds.max.z - node.bounds.min.z) * scale;
+        const centreX = toScreen((node.bounds.max.x + node.bounds.min.x) / 2, 0)[0];
+        const centreY = toScreen(0, (node.bounds.max.z + node.bounds.min.z) / 2)[1];
+        const yaw = yawOf(node.transform.quat);
+        context.save();
+        context.translate(centreX, centreY);
+        context.rotate(yaw);
+        context.strokeStyle = 'rgba(232,228,220,0.28)';
+        context.lineWidth = 0.8;
+        context.strokeRect(-width / 2, -depth / 2, width, depth);
+        context.restore();
+      }
       context.fillStyle = 'rgba(232,228,220,0.9)';
       context.beginPath();
-      context.arc(sx, sy, 2, 0, Math.PI * 2);
+      context.arc(sx, sy, 1.6, 0, Math.PI * 2);
       context.fill();
     }
 

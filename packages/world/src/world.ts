@@ -19,6 +19,7 @@ export interface InputState {
   forward: number;
   right: number;
   sprint: boolean;
+  jump: boolean;
   yawDelta: number;
   pitchDelta: number;
 }
@@ -27,6 +28,7 @@ export const NO_INPUT: InputState = {
   forward: 0,
   right: 0,
   sprint: false,
+  jump: false,
   yawDelta: 0,
   pitchDelta: 0,
 };
@@ -59,6 +61,8 @@ interface BoundNode {
 const WALK_SPEED = 2.1;
 const SPRINT_SPEED = 3.8;
 const EYE_HEIGHT = 1.67;
+const GRAVITY = 18;
+const JUMP_SPEED = 5.2;
 const PITCH_LIMIT = Math.PI / 2 - 0.08;
 
 /** The world owns state: nodes, terrain, camera, chunks. It knows nothing about UI or models. */
@@ -76,8 +80,9 @@ export class World {
   private readonly hooks: WorldHooks;
   private yaw = 0;
   private pitch = 0;
-  private readonly position: Vec3 = { x: 0, y: EYE_HEIGHT, z: 0 };
-  private groundedY = 0;
+  private readonly position: Vec3 = { x: 0, y: 0, z: 0 };
+  private velocityY = 0;
+  private grounded = true;
 
   constructor(options: WorldOptions) {
     this.id = options.worldId;
@@ -107,6 +112,10 @@ export class World {
     return { ...this.position };
   }
 
+  get onGround(): boolean {
+    return this.grounded;
+  }
+
   get camera(): GameCamera {
     const euler = new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ');
     const quat = new THREE.Quaternion().setFromEuler(euler);
@@ -134,6 +143,8 @@ export class World {
     this.position.x = x;
     this.position.z = z;
     this.position.y = this.groundHeightAt(x, z);
+    this.velocityY = 0;
+    this.grounded = true;
   }
 
   /** Bind an asset into the world and give it a node. */
@@ -161,6 +172,7 @@ export class World {
       assetRef: { assetId: bundle.assetId, version: bundle.version },
       semantic: bundle.semantic,
       chunkId: chunkIdOf(position.x, position.z),
+      bounds: runtime.bounds,
     };
     this.nodes.set(nodeId, { node, object3d: runtime.object3d, bundle, chunkId: node.chunkId });
     return nodeId;
@@ -169,6 +181,40 @@ export class World {
   /** Snapshot of bound nodes, used by maps and debugging panels. */
   listNodes(): WorldNode[] {
     return [...this.nodes.values()].map((bound) => bound.node);
+  }
+
+  /** Object3D for a node; the UI needs it for selection outlines. */
+  objectOf(nodeId: NodeId): THREE.Object3D | undefined {
+    return this.nodes.get(nodeId)?.object3d;
+  }
+
+  /** Swap an asset on an existing node without moving it (modify flow). */
+  modifyNode(nodeId: NodeId, bundle: AssetBundle): boolean {
+    const bound = this.nodes.get(nodeId);
+    if (!bound) return false;
+    const { pos, quat } = bound.node.transform;
+    const rotationY = Math.atan2(2 * (quat.w * quat.y + quat.x * quat.z), 1 - 2 * (quat.y * quat.y + quat.z * quat.z));
+
+    this.sceneRoot.remove(bound.object3d);
+    bound.object3d.traverse((child) => {
+      if (child instanceof THREE.Mesh) child.geometry.dispose();
+    });
+
+    const runtime = instantiateAsset(bundle, {
+      nodeId,
+      assetId: bundle.assetId,
+      position: pos,
+      rotationY,
+    });
+    runtime.object3d.name = nodeId;
+    this.sceneRoot.add(runtime.object3d);
+
+    bound.object3d = runtime.object3d;
+    bound.bundle = bundle;
+    bound.node.assetRef = { assetId: bundle.assetId, version: bundle.version };
+    bound.node.semantic = bundle.semantic;
+    bound.node.bounds = runtime.bounds;
+    return true;
   }
 
   removeNode(nodeId: NodeId): void {
@@ -199,9 +245,21 @@ export class World {
     if (this.isFree(nextX, this.position.z)) this.position.x = nextX;
     if (this.isFree(this.position.x, nextZ)) this.position.z = nextZ;
 
+    if (input.jump && this.grounded) {
+      this.velocityY = JUMP_SPEED;
+      this.grounded = false;
+    }
+    this.velocityY -= GRAVITY * dt;
+    this.position.y += this.velocityY * dt;
+
     const ground = this.groundHeightAt(this.position.x, this.position.z);
-    this.groundedY += (ground - this.groundedY) * Math.min(1, dt * 12);
-    this.position.y = this.groundedY;
+    if (this.position.y <= ground) {
+      this.position.y = ground;
+      this.velocityY = 0;
+      this.grounded = true;
+    } else if (this.position.y > ground + 0.02) {
+      this.grounded = false;
+    }
 
     this.chunks.update(this.position);
     this.physics?.step(dt);

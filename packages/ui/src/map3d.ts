@@ -131,12 +131,21 @@ export function createMap3D(canvas: HTMLCanvasElement, world: World): Map3D {
     distance = Math.max(8, Math.max(maxX - minX, maxZ - minZ) * 1.9);
 
     for (const node of world.listNodes()) {
-      const marker = new THREE.Mesh(
-        new THREE.BoxGeometry(0.18, 0.18, 0.18),
-        new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.8 }),
-      );
-      marker.position.set(node.transform.pos.x, node.transform.pos.y + 0.12, node.transform.pos.z);
-      content.add(marker);
+      if (node.bounds) {
+        const box = new THREE.Box3(
+          new THREE.Vector3(node.bounds.min.x, node.bounds.min.y, node.bounds.min.z),
+          new THREE.Vector3(node.bounds.max.x, node.bounds.max.y, node.bounds.max.z),
+        );
+        const helper = new THREE.Box3Helper(box, 0x8f97a3);
+        content.add(helper);
+      } else {
+        const marker = new THREE.Mesh(
+          new THREE.BoxGeometry(0.18, 0.18, 0.18),
+          new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.8 }),
+        );
+        marker.position.set(node.transform.pos.x, node.transform.pos.y + 0.12, node.transform.pos.z);
+        content.add(marker);
+      }
     }
 
     const cameraPos = world.camera.pos;

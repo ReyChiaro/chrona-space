@@ -149,6 +149,8 @@ export interface AssetRequest {
   chunkId?: ChunkId;
   op: 'create' | 'modify' | 'delete';
   target: Target;
+  /** Present for `op='modify'`: the asset being edited. */
+  baseAsset?: { assetId: AssetId; version: SemVer; semantic: string };
   intent: { text: string; refImages: ImageRef[] };
   scene: SceneSnapshot;
   neighborDigest?: string;
@@ -338,6 +340,8 @@ export interface WorldNode {
   assetRef?: { assetId: AssetId; version: SemVer };
   semantic?: string;
   chunkId?: ChunkId;
+  /** World-space bounds, used by maps and selection. */
+  bounds?: { min: Vec3; max: Vec3 };
 }
 
 export type WorldEvent =

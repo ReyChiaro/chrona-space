@@ -5,5 +5,7 @@ export type { RecordedSession, Segment } from './recorder.js';
 export { assembleClipRequest, DEFAULT_CLIP_SPEC, DEFAULT_RENDER_PARAMS } from './clip.js';
 export { ClipQueue } from './queue.js';
 export type { ClipJob, ClipJobStatus } from './queue.js';
+export { snapshotWorld, restoreWorld } from './persistence.js';
+export type { SavedNode, SavedWorld } from './persistence.js';
 export { validateBundle } from './validation.js';
 export type { ValidationResult } from './validation.js';

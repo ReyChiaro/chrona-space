@@ -25,11 +25,17 @@ export class StubCodeAgent implements CodeAgent {
   constructor(private readonly catalog: AssetSpec[] = ROOM_ITEMS) {}
 
   async createAsset(request: AssetRequest): Promise<AssetBundle> {
-    const spec = this.match(request.intent.text);
+    const modifying = request.op === 'modify' && request.baseAsset;
+    const base = modifying
+      ? this.catalog.find((item) => item.assetId === request.baseAsset!.assetId)
+      : undefined;
+    const spec: AssetSpec = base
+      ? { ...base, promptFragment: `${base.promptFragment}；${request.intent.text}` }
+      : this.match(request.intent.text);
     const script = compileAssetScript(spec);
     return {
       assetId: spec.assetId,
-      version: '1.0.0',
+      version: modifying ? bumpPatch(request.baseAsset!.version) : '1.0.0',
       semantic: spec.semantic,
       script: { source: script.source, hash: hashString(script.source) },
       appearance: {
@@ -113,6 +119,13 @@ export class StubCodeAgent implements CodeAgent {
  * Real Code Agent adapter. Disabled by default; enabling it requires
  * CHRONA_AGENT_BASE_URL / CHRONA_AGENT_API_KEY in .env.
  */
+/** 1.0.0 → 1.0.1; used by the modify flow to keep versions immutable. */
+function bumpPatch(version: string): string {
+  const parts = version.split('.').map(Number);
+  const patch = (parts[2] ?? 0) + 1;
+  return `${parts[0] ?? 1}.${parts[1] ?? 0}.${patch}`;
+}
+
 export class ApiCodeAgent implements CodeAgent {
   readonly name = 'api-agent';
 

@@ -17,6 +17,23 @@ export interface WindowSpec {
 }
 
 let zCounter = 20;
+const LAYOUT_KEY = 'chrona.layout';
+
+interface SavedRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  open: boolean;
+}
+
+function loadLayout(): Record<string, SavedRect> {
+  try {
+    return JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}') as Record<string, SavedRect>;
+  } catch {
+    return {};
+  }
+}
 
 export class FloatingWindow {
   readonly id: string;
@@ -26,18 +43,21 @@ export class FloatingWindow {
   private readonly onOpen?: () => void;
   private readonly onClose?: () => void;
 
-  constructor(spec: WindowSpec, layer: HTMLElement) {
+  private readonly onChange?: () => void;
+
+  constructor(spec: WindowSpec, layer: HTMLElement, saved?: SavedRect, onChange?: () => void) {
     this.id = spec.id;
     this.onOpen = spec.onOpen;
     this.onClose = spec.onClose;
+    this.onChange = onChange;
 
     const element = document.createElement('div');
     element.className = 'win';
     element.dataset.window = spec.id;
-    element.style.width = `${spec.width ?? 360}px`;
-    element.style.height = `${spec.height ?? 240}px`;
-    element.style.left = `${spec.x ?? 24}px`;
-    element.style.top = `${spec.y ?? 64}px`;
+    element.style.width = `${saved?.width ?? spec.width ?? 360}px`;
+    element.style.height = `${saved?.height ?? spec.height ?? 240}px`;
+    element.style.left = `${saved?.x ?? spec.x ?? 24}px`;
+    element.style.top = `${saved?.y ?? spec.y ?? 64}px`;
 
     const header = document.createElement('div');
     header.className = 'win-header';
@@ -72,6 +92,7 @@ export class FloatingWindow {
 
     this.element = element;
     layer.append(element);
+    if (saved?.open) this.show();
   }
 
   get isOpen(): boolean {
@@ -83,6 +104,7 @@ export class FloatingWindow {
     this.open = true;
     this.element.classList.add('open');
     this.focus();
+    this.onChange?.();
     this.onOpen?.();
   }
 
@@ -90,6 +112,7 @@ export class FloatingWindow {
     if (!this.open) return;
     this.open = false;
     this.element.classList.remove('open', 'focused');
+    this.onChange?.();
     this.onClose?.();
   }
 
@@ -138,6 +161,7 @@ export class FloatingWindow {
         const maxY = window.innerHeight - 40;
         element.style.left = `${Math.min(maxX, Math.max(0, originX + e.clientX - startX))}px`;
         element.style.top = `${Math.min(maxY, Math.max(0, originY + e.clientY - startY))}px`;
+        this.onChange?.();
       };
       const up = (): void => {
         handle.removeEventListener('pointermove', move);
@@ -167,6 +191,7 @@ export class FloatingWindow {
       const move = (e: PointerEvent): void => {
         element.style.width = `${Math.max(220, originW + e.clientX - startX)}px`;
         element.style.height = `${Math.max(140, originH + e.clientY - startY)}px`;
+        this.onChange?.();
       };
       const up = (): void => {
         grip.removeEventListener('pointermove', move);
@@ -182,10 +207,15 @@ export class WindowLayer {
   private readonly windows = new Map<string, FloatingWindow>();
   private lastFocused: FloatingWindow | null = null;
 
-  constructor(private readonly root: HTMLElement) {}
+  private readonly saved: Record<string, SavedRect>;
+  private saveTimer = 0;
+
+  constructor(private readonly root: HTMLElement) {
+    this.saved = loadLayout();
+  }
 
   create(spec: WindowSpec): FloatingWindow {
-    const win = new FloatingWindow(spec, this.root);
+    const win = new FloatingWindow(spec, this.root, this.saved[spec.id], () => this.scheduleSave());
     this.windows.set(spec.id, win);
     win.element.addEventListener('pointerdown', () => {
       this.lastFocused = win;
@@ -211,6 +241,31 @@ export class WindowLayer {
     target.hide();
     this.lastFocused = null;
     return true;
+  }
+
+  /** Persist rects and open state so a refresh restores the workspace. */
+  private scheduleSave(): void {
+    window.clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => this.saveLayout(), 200);
+  }
+
+  private saveLayout(): void {
+    const layout: Record<string, SavedRect> = {};
+    for (const [id, win] of this.windows) {
+      const element = win.element;
+      layout[id] = {
+        x: element.offsetLeft,
+        y: element.offsetTop,
+        width: element.offsetWidth,
+        height: element.offsetHeight,
+        open: win.isOpen,
+      };
+    }
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+    } catch {
+      /* storage full or disabled — layout is a convenience, not state */
+    }
   }
 
   closeAll(): void {

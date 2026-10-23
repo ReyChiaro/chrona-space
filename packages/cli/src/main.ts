@@ -101,6 +101,7 @@ async function main(): Promise<void> {
       forward: 0,
       right: 0,
       sprint: false,
+      jump: false,
       yawDelta: 0,
       pitchDelta: 0,
     });

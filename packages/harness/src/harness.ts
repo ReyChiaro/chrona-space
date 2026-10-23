@@ -151,6 +151,41 @@ export class Harness {
     return this.lastOutcome;
   }
 
+  /** Modify an existing node: same transform, new asset version. */
+  async modifyAsset(nodeId: string, text: string): Promise<AssetOutcome> {
+    const node = this.world.listNodes().find((candidate) => candidate.id === nodeId);
+    if (!node?.assetRef) throw new Error(`node not found: ${nodeId}`);
+
+    const request: AssetRequest = {
+      requestId: `mod_${this.clipCounter++}_${Date.now().toString(36)}`,
+      worldId: this.worldId,
+      chunkId: node.chunkId,
+      op: 'modify',
+      target: { kind: 'node', nodeId },
+      baseAsset: {
+        assetId: node.assetRef.assetId,
+        version: node.assetRef.version,
+        semantic: node.semantic ?? node.assetRef.assetId,
+      },
+      intent: { text, refImages: [] },
+      scene: this.world.snapshot(),
+      budget: { maxTriangles: 64_000, maxAssets: 24, maxScriptBytes: 512 * 1024 },
+      constraints: { alignToGround: false },
+    };
+
+    const bundle = await this.agent.createAsset(request);
+    const validation = validateBundle(bundle);
+    if (!validation.ok && !bundle.degraded) {
+      throw new Error(`asset rejected: ${validation.errors.join('; ')}`);
+    }
+    await this.archive.put(bundle);
+    if (!this.world.modifyNode(nodeId, bundle)) throw new Error(`node vanished: ${nodeId}`);
+
+    const outcome: AssetOutcome = { nodeId, bundle, validation };
+    this.lastOutcome = outcome;
+    return outcome;
+  }
+
   get lastAsset(): AssetOutcome | undefined {
     return this.lastOutcome;
   }

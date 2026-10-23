@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { PhysicsWorld, World } from '@chrona/world';
-import { MemoryArchive, ViewpointMemory } from '@chrona/storage';
-import { ClipQueue, Harness, type Segment } from '@chrona/harness';
+import { MemoryArchive, ViewpointMemory, type Archive } from '@chrona/storage';
+import { ClipQueue, Harness, restoreWorld, snapshotWorld, type SavedWorld, type Segment } from '@chrona/harness';
 import { ROOM_ITEMS, StubCodeAgent, createVideoGenerator } from '@chrona/services';
 import { buildPreviewMesh, buildTerrainMesh, type Bounds } from './terrainMesh.js';
 import { WindowLayer } from './windows.js';
 import { createMap2D } from './map2d.js';
 import { createMap3D } from './map3d.js';
+import { toast } from './toast.js';
+import { IdbArchive, IdbStore, withTimeout } from './persistence.js';
 
 const SERVICE_URL = 'http://127.0.0.1:8000';
 const BOUNDS: Bounds = { min: { x: -3.2, z: -2.6 }, max: { x: 3.2, z: 2.6 } };
@@ -61,10 +63,18 @@ async function boot(): Promise<void> {
     loadRadius: 1,
     prefetchRadius: 2,
   });
+  let store: IdbStore | null = null;
+  let archive: Archive = new MemoryArchive();
+  try {
+    store = await withTimeout(new IdbStore().open(), 12000);
+    archive = new IdbArchive(store);
+  } catch {
+    archive = new MemoryArchive();
+  }
   const harness = new Harness({
     worldId: 'demo',
     world,
-    archive: new MemoryArchive(),
+    archive,
     agent: new StubCodeAgent(),
     video: await createVideoGenerator(SERVICE_URL),
     memory: new ViewpointMemory(),
@@ -72,7 +82,25 @@ async function boot(): Promise<void> {
 
   addLights();
   scene.add(world.scene);
-  const outcomes = await harness.seedRoom(ROOM_ITEMS);
+
+  /** Snapshot of the parts of the world worth keeping across reloads. */
+  async function saveWorldState(): Promise<void> {
+    if (!store) return;
+    const saved: SavedWorld = snapshotWorld(world, 0x8f21c4);
+    await store.saveWorld(saved);
+  }
+
+  const restored = store ? await store.loadWorld() : undefined;
+  let bootNote = '';
+  if (restored) {
+    const count = await restoreWorld(world, archive, restored);
+    bootNote = `恢复 ${count} 资产 · ${restored.edits.length} 地形编辑`;
+  } else {
+    await harness.seedRoom(ROOM_ITEMS);
+    await saveWorldState();
+    bootNote = store ? '新建世界（已写入 IndexedDB）' : '新建世界（存储不可用，本次不持久化）';
+  }
+
   let terrainMesh = buildTerrainMesh(world.terrain, BOUNDS);
   scene.add(terrainMesh);
 
@@ -98,6 +126,7 @@ async function boot(): Promise<void> {
   helpBody.className = 'keys';
   helpBody.innerHTML = [
     ['WASD / Shift', '移动 / 快走'],
+    ['空格', '跳跃'],
     ['鼠标', '视角（点击画面锁定指针）'],
     ['R', '开始 / 结束录制'],
     ['E', '地形预览（左键确认）'],
@@ -110,7 +139,8 @@ async function boot(): Promise<void> {
     ['C', '创作'],
     ['B', '素材库'],
     ['O', '状态'],
-    ['Esc', '关闭最近打开的窗口'],
+    ['Esc / Backspace', '关闭最近打开的窗口（指针锁定时先按 Esc 解锁）'],
+    ['右键', '选中物体（再点空白取消）'],
   ]
     .map(([key, text]) => `<div><kbd>${key}</kbd><span>${text}</span></div>`)
     .join('');
@@ -171,6 +201,7 @@ async function boot(): Promise<void> {
   const map2d = createMap2D(map2dCanvas, world, (x, z) => {
     world.teleport(x, z);
     log(`传送 → ${x.toFixed(1)}, ${z.toFixed(1)}`);
+    toast('已传送', 'info');
     map3dView.refresh();
   });
   const map3dView = createMap3D(map3dCanvas, world);
@@ -245,12 +276,14 @@ async function boot(): Promise<void> {
       if (!draft) return;
       const pending = draft;
       preview.cancel();
-      void harness.commitTerrain(pending).then(() => {
+      void harness.commitTerrain(pending).then(async () => {
         scene.remove(terrainMesh);
         terrainMesh = buildTerrainMesh(world.terrain, BOUNDS);
         scene.add(terrainMesh);
         map3dView.refresh();
+        await saveWorldState();
         log('地形已提交');
+        toast('地形已提交', 'success');
       });
     },
     cancel(): void {
@@ -293,20 +326,85 @@ async function boot(): Promise<void> {
   async function submitCreate(): Promise<void> {
     const text = createInput.value.trim();
     if (!text) return;
-    createStatus.textContent = '生成中…';
+    createStatus.textContent = '处理中…';
     try {
-      const outcome = await harness.createAsset(text);
-      createStatus.textContent = `${outcome.bundle.semantic} · ${outcome.validation.ok ? '通过' : '降级'}`;
+      if (selected) {
+        const outcome = await harness.modifyAsset(selected.nodeId, text);
+        createStatus.textContent = `${outcome.bundle.semantic} · v${outcome.bundle.version}`;
+        log(`修改 ${outcome.bundle.semantic} → v${outcome.bundle.version}：${text}`);
+        toast(`已修改 ${outcome.bundle.semantic} → v${outcome.bundle.version}`, 'success');
+        selectNode(selected.nodeId);
+      } else {
+        const outcome = await harness.createAsset(text);
+        createStatus.textContent = `${outcome.bundle.semantic} · ${outcome.validation.ok ? '通过' : '降级'}`;
+        log(`新增 ${outcome.bundle.semantic} (${outcome.bundle.assetId})`);
+        toast(`已添加 ${outcome.bundle.semantic}`, 'success');
+      }
       createInput.value = '';
-      log(`新增 ${outcome.bundle.semantic} (${outcome.bundle.assetId})`);
+      await saveWorldState();
       map3dView.refresh();
       refreshLibrary();
     } catch (error) {
       createStatus.textContent = `失败：${(error as Error).message}`;
+      toast(`失败：${(error as Error).message}`, 'error');
     }
   }
   createInput.addEventListener('keydown', (event) => {
     if (event.code === 'Enter') void submitCreate();
+  });
+
+  // ------------------------------------------------------------- selection
+  let selected: { nodeId: string; semantic: string } | null = null;
+  let outline: THREE.BoxHelper | null = null;
+
+  function clearOutline(): void {
+    if (!outline) return;
+    scene.remove(outline);
+    outline.geometry.dispose();
+    (outline.material as THREE.Material).dispose();
+    outline = null;
+  }
+
+  function updateCreateMode(): void {
+    const title = document.querySelector<HTMLElement>('.win[data-window="create"] .win-title');
+    if (title) title.textContent = selected ? `修改 · ${selected.semantic}` : '创作';
+    createInput.placeholder = selected ? '描述要怎么改，回车提交' : '描述要添加的物体，回车提交';
+  }
+
+  function selectNode(nodeId: string | null): void {
+    clearOutline();
+    if (!nodeId) {
+      selected = null;
+      updateCreateMode();
+      return;
+    }
+    const node = world.listNodes().find((candidate) => candidate.id === nodeId);
+    const object = world.objectOf(nodeId);
+    if (!node || !object) {
+      selected = null;
+      updateCreateMode();
+      return;
+    }
+    selected = { nodeId, semantic: node.semantic ?? nodeId };
+    outline = new THREE.BoxHelper(object, 0x9fd0ff);
+    outline.renderOrder = 6;
+    const material = outline.material as THREE.LineBasicMaterial;
+    material.depthTest = false;
+    material.transparent = true;
+    material.opacity = 0.9;
+    scene.add(outline);
+    updateCreateMode();
+    toast(`已选中 ${selected.semantic}`, 'info');
+  }
+
+  window.addEventListener('pointerdown', (event) => {
+    if (event.button !== 2) return;
+    if (preview.isActive()) {
+      preview.cancel();
+      return;
+    }
+    const hit = world.pick(60);
+    selectNode(hit?.nodeId ?? null);
   });
 
   // ------------------------------------------------------------- recording
@@ -345,6 +443,7 @@ async function boot(): Promise<void> {
       startCapture();
       hud.classList.add('on');
       log('录制开始');
+      toast('录制中…', 'info');
       return;
     }
     const segments: Segment[] = harness.stopRecording();
@@ -357,6 +456,7 @@ async function boot(): Promise<void> {
       renderWindow.show();
     }
     log(`录制结束 · ${segments.length} 段`);
+    toast(`录制结束 · ${segments.length} 段`, 'success');
     queue.enqueue(segments);
     const jobs = await queue.drain();
     for (const job of jobs) {
@@ -393,6 +493,7 @@ async function boot(): Promise<void> {
     if (renderMode === 'full') {
       renderWindow.setRect({ x: 24, y: 24, width: innerWidth - 48, height: innerHeight - 48 });
     }
+    layoutViewport();
   }
 
   function cycleRenderMode(): void {
@@ -411,8 +512,9 @@ async function boot(): Promise<void> {
   }
 
   // ---------------------------------------------------------------- input
-  const input = { forward: 0, right: 0, sprint: false, yawDelta: 0, pitchDelta: 0 };
+  const input = { forward: 0, right: 0, sprint: false, jump: false, yawDelta: 0, pitchDelta: 0 };
   const keys = new Set<string>();
+  let jumpRequested = false;
 
   canvas.addEventListener('click', () => {
     if (document.pointerLockElement !== canvas) {
@@ -448,6 +550,10 @@ async function boot(): Promise<void> {
       case 'KeyV':
         cycleRenderMode();
         break;
+      case 'Space':
+        event.preventDefault();
+        if (!event.repeat) jumpRequested = true;
+        break;
       case 'KeyH':
         windows.toggle('help');
         break;
@@ -476,6 +582,14 @@ async function boot(): Promise<void> {
         windows.toggle('stats');
         break;
       case 'Escape':
+        if (document.pointerLockElement === canvas) {
+          toast('已解锁；再按 Esc 或 Backspace 关闭窗口', 'info');
+          break;
+        }
+        if (!windows.closeLast()) windows.closeAll();
+        break;
+      case 'Backspace':
+        event.preventDefault();
         if (!windows.closeLast()) windows.closeAll();
         break;
       default:
@@ -494,17 +608,21 @@ async function boot(): Promise<void> {
   });
 
   // --------------------------------------------------------------- resize
-  const resize = (): void => {
-    const width = window.innerWidth;
+  function layoutViewport(): void {
+    const side = renderMode === 'side';
+    const width = Math.max(320, side ? Math.floor(window.innerWidth / 2) : window.innerWidth);
     const height = window.innerHeight;
-    renderer.setSize(width, height);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    canvas.style.display = renderMode === 'full' ? 'none' : 'block';
+    renderer.setSize(width, height, false);
     camera.aspect = 16 / 9;
     camera.updateProjectionMatrix();
     const viewWidth = Math.min(width, (height * 16) / 9);
     renderer.setViewport((width - viewWidth) / 2, 0, viewWidth, height);
-  };
-  window.addEventListener('resize', resize);
-  resize();
+  }
+  window.addEventListener('resize', layoutViewport);
+  layoutViewport();
 
   // ----------------------------------------------------------------- loop
   const clock = new THREE.Clock();
@@ -517,6 +635,8 @@ async function boot(): Promise<void> {
     input.forward = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
     input.right = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
     input.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    input.jump = jumpRequested;
+    jumpRequested = false;
 
     world.update(dt, input);
     harness.tickRecording();
@@ -538,6 +658,7 @@ async function boot(): Promise<void> {
     captureRenderer.render(scene, camera);
     previewLayer.visible = true;
 
+    if (outline) outline.update();
     if (windows.isOpen('map2d')) map2d.draw();
     if (windows.isOpen('map3d')) map3dView.render();
 
@@ -569,7 +690,19 @@ async function boot(): Promise<void> {
   }
 
   animate();
-  log(`assets ${outcomes.length} · chunks ${world.chunks.active().length} · ${harness.video.name}`);
+  log(`${bootNote} · chunks ${world.chunks.active().length} · ${harness.video.name}`);
+  const query = new URLSearchParams(location.search);
+  const selectParam = query.get('select');
+  if (selectParam) {
+    const nodes = world.listNodes();
+    const node = selectParam === 'first' ? nodes[0] : nodes.find((n) => n.assetRef?.assetId === selectParam);
+    if (node) selectNode(node.id);
+  }
+  const modeParam = query.get('mode');
+  if (modeParam === 'side' || modeParam === 'full' || modeParam === 'hidden' || modeParam === 'window') {
+    renderMode = modeParam;
+    applyRenderMode();
+  }
   document.title = 'Chrona · ready';
 }
 
@@ -671,4 +804,5 @@ function buildParams(root: HTMLElement, harness: Harness): void {
 boot().catch((error: unknown) => {
   console.error(error);
   windowHost.textContent = `启动失败：${(error as Error).message}`;
+  toast(`启动失败：${(error as Error).message}`, 'error');
 });
