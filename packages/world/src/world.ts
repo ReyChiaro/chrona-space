@@ -79,6 +79,8 @@ export class World {
 
   private readonly sceneRoot = new THREE.Group();
   private readonly hooks: WorldHooks;
+  private readonly chunkSize: number;
+  private readonly terrainColliders = new Map<string, number>();
   private yaw = 0;
   private pitch = 0;
   private readonly position: Vec3 = { x: 0, y: 0, z: 0 };
@@ -91,6 +93,7 @@ export class World {
     this.physics = options.physics ?? null;
     this.hooks = options.hooks ?? {};
     const size = options.chunkSize ?? 64;
+    this.chunkSize = size;
     this.chunks = new ChunkManager(
       {
         size,
@@ -99,8 +102,14 @@ export class World {
       },
       options.generateChunk ?? (async () => {}),
       {
-        onActivate: (record) => this.hooks.onChunkActivated?.(record, this.terrain),
-        onEvict: (record) => this.hooks.onChunkEvicted?.(record),
+        onActivate: (record) => {
+          this.addTerrainCollider(record);
+          this.hooks.onChunkActivated?.(record, this.terrain);
+        },
+        onEvict: (record) => {
+          this.removeTerrainCollider(record);
+          this.hooks.onChunkEvicted?.(record);
+        },
       },
     );
   }
@@ -172,7 +181,7 @@ export class World {
       },
       assetRef: { assetId: bundle.assetId, version: bundle.version },
       semantic: bundle.semantic,
-      chunkId: chunkIdOf(position.x, position.z),
+      chunkId: chunkIdOf(position.x, position.z, this.chunkSize),
       bounds: runtime.bounds,
     };
     this.nodes.set(nodeId, { node, object3d: runtime.object3d, bundle, chunkId: node.chunkId, bodyHandle });
@@ -369,6 +378,38 @@ export class World {
       previous = t;
     }
     return null;
+  }
+
+  /** Heightfield collider per active chunk, so terrain is solid, not just drawn. */
+  private addTerrainCollider(record: import('./chunk.js').ChunkRecord): void {
+    if (!this.physics || this.terrainColliders.has(record.id)) return;
+    const resolution = 16;
+    const step = record.size / resolution;
+    const heights = new Float32Array((resolution + 1) * (resolution + 1));
+    for (let z = 0; z <= resolution; z += 1) {
+      for (let x = 0; x <= resolution; x += 1) {
+        heights[z * (resolution + 1) + x] = this.terrain.heightAt(
+          record.cx * record.size + x * step,
+          record.cz * record.size + z * step,
+        );
+      }
+    }
+    const handle = this.physics.addHeightfield(
+      { x: record.cx * record.size, y: 0, z: record.cz * record.size },
+      record.size,
+      heights,
+      resolution,
+    );
+    if (handle !== undefined) this.terrainColliders.set(record.id, handle);
+    // Make the new surface queryable before the next physics flush.
+    this.physics.flushQueries();
+  }
+
+  private removeTerrainCollider(record: import('./chunk.js').ChunkRecord): void {
+    const handle = this.terrainColliders.get(record.id);
+    if (handle === undefined) return;
+    this.physics?.removeBody(handle);
+    this.terrainColliders.delete(record.id);
   }
 
   /** Highest surface under the player, from the floor to anything standable. */

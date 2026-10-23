@@ -17,6 +17,7 @@ dist/
 # 构建 / 运行时产物（本地检查用，不入库）
 worlds/
 tests/
+services/video-generator/data/
 .uv-cache/
 .uv/
 

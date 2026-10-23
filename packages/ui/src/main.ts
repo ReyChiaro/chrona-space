@@ -2,7 +2,15 @@ import * as THREE from 'three';
 import { PhysicsWorld, World } from '@chrona/world';
 import { MemoryArchive, ViewpointMemory, type Archive } from '@chrona/storage';
 import { ClipQueue, Harness, restoreWorld, snapshotWorld, type SavedWorld, type Segment } from '@chrona/harness';
-import { ROOM_ITEMS, StubCodeAgent, createVideoGenerator } from '@chrona/services';
+import {
+  ApiCodeAgent,
+  ProxyTransport,
+  ROOM_ITEMS,
+  StubCodeAgent,
+  createVideoGenerator,
+  type CodeAgent,
+} from '@chrona/services';
+import { hashString } from '@chrona/world';
 import { buildPreviewMesh, buildTerrainMesh, type Bounds } from './terrainMesh.js';
 import { WindowLayer } from './windows.js';
 import { createMap2D } from './map2d.js';
@@ -10,7 +18,9 @@ import { createMap3D } from './map3d.js';
 import { toast } from './toast.js';
 import { IdbArchive, IdbStore, withTimeout } from './persistence.js';
 
-const SERVICE_URL = 'http://127.0.0.1:8000';
+const SERVICE_URL =
+  new URLSearchParams(location.search).get('service') ?? 'http://127.0.0.1:8000';
+const THUMB_WIDTH = Math.min(1344, Math.max(160, Number(new URLSearchParams(location.search).get('thumb') ?? 512) || 512));
 const BOUNDS: Bounds = { min: { x: -3.2, z: -2.6 }, max: { x: 3.2, z: 2.6 } };
 const DOCK: { id: string; glyph: string; label: string }[] = [
   { id: 'render', glyph: '▣', label: '渲染' },
@@ -45,6 +55,25 @@ captureCanvas.height = 768;
 const captureRenderer = new THREE.WebGLRenderer({ canvas: captureCanvas, antialias: true });
 captureRenderer.outputColorSpace = THREE.SRGBColorSpace;
 
+/** In-memory reference frame for memory / tail handoff. Resolution is configurable. */
+const thumbCanvas = document.createElement('canvas');
+const thumbContext = thumbCanvas.getContext('2d')!;
+let thumbWidth = THUMB_WIDTH;
+function applyThumbWidth(width: number): void {
+  thumbWidth = Math.min(1344, Math.max(160, Math.round(width)));
+  thumbCanvas.width = thumbWidth;
+  thumbCanvas.height = Math.round((thumbWidth * 9) / 16);
+}
+applyThumbWidth(THUMB_WIDTH);
+function captureThumbnail(): { path: string; width: number; height: number } {
+  thumbContext.drawImage(captureCanvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+  return {
+    path: thumbCanvas.toDataURL('image/webp', 0.72),
+    width: thumbCanvas.width,
+    height: thumbCanvas.height,
+  };
+}
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0810);
 scene.fog = new THREE.Fog(0x0a0810, 12, 34);
@@ -54,6 +83,7 @@ scene.add(previewLayer);
 
 async function boot(): Promise<void> {
   const physics = await PhysicsWorld.create();
+  let chunkGenerator: ((record: import('@chrona/world').ChunkRecord) => Promise<void>) | null = null;
   const world = new World({
     worldId: 'demo',
     seed: 0x8f21c4,
@@ -62,6 +92,9 @@ async function boot(): Promise<void> {
     chunkSize: 16,
     loadRadius: 1,
     prefetchRadius: 2,
+    generateChunk: async (record) => {
+      if (chunkGenerator) await chunkGenerator(record);
+    },
   });
   let store: IdbStore | null = null;
   let archive: Archive = new MemoryArchive();
@@ -71,14 +104,38 @@ async function boot(): Promise<void> {
   } catch {
     archive = new MemoryArchive();
   }
+  const generator = await createVideoGenerator(SERVICE_URL);
+  let agentRef: CodeAgent = new StubCodeAgent();
+  let loras: { id: string; label: string }[] = [];
+  let apiAgentEnabled = false;
+  if ('config' in generator && typeof generator.config === 'function') {
+    try {
+      const config = await generator.config();
+      apiAgentEnabled = config.agentEnabled;
+      loras = config.loras ?? [];
+    } catch {
+      apiAgentEnabled = false;
+    }
+  }
+
   const harness = new Harness({
     worldId: 'demo',
     world,
     archive,
-    agent: new StubCodeAgent(),
-    video: await createVideoGenerator(SERVICE_URL),
+    agent: {
+      get name() {
+        return agentRef.name;
+      },
+      createAsset: (request) => agentRef.createAsset(request),
+      createTerrainEdit: (request) => agentRef.createTerrainEdit(request),
+    },
+    video: generator,
     memory: new ViewpointMemory(),
   });
+
+  if (apiAgentEnabled) {
+    agentRef = new ApiCodeAgent(new ProxyTransport(SERVICE_URL), harness.createToolHost());
+  }
 
   addLights();
   scene.add(world.scene);
@@ -89,6 +146,36 @@ async function boot(): Promise<void> {
     const saved: SavedWorld = snapshotWorld(world, 0x8f21c4);
     await store.saveWorld(saved);
   }
+
+  const bootMessages: string[] = [];
+  chunkGenerator = async (record) => {
+    const centreX = (record.cx + 0.5) * record.size;
+    const centreZ = (record.cz + 0.5) * record.size;
+    if (Math.hypot(centreX, centreZ) < 14) return; // keep the authored room clean
+    if (world.listNodes().some((node) => node.chunkId === record.id)) return; // restored content
+
+    const seed = parseInt(hashString(record.id), 16) || 1;
+    let state = seed;
+    const rand = (): number => {
+      state = (state + 0x6d2b79f5) | 0;
+      let t = Math.imul(state ^ (state >>> 15), 1 | state);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const picks = ['木箱', '小桌', '落地灯', '盆栽', '矮柜'];
+    const count = 1 + Math.floor(rand() * 3);
+    for (let i = 0; i < count; i += 1) {
+      const angle = rand() * Math.PI * 2;
+      const radius = 2 + rand() * Math.max(1, record.size / 2 - 3);
+      await harness.createAsset(
+        picks[Math.floor(rand() * picks.length)]!,
+        { x: centreX + Math.cos(angle) * radius, y: 0, z: centreZ + Math.sin(angle) * radius },
+        rand() * Math.PI * 2,
+      );
+    }
+    await saveWorldState();
+    bootMessages.push(`区块 ${record.id}：${count} 件环境资产`);
+  };
 
   const restored = store ? await store.loadWorld() : undefined;
   let bootNote = '';
@@ -256,7 +343,7 @@ async function boot(): Promise<void> {
   const paramsBody = document.createElement('div');
   paramsBody.className = 'params';
   windows.create({ id: 'params', title: '参数', body: paramsBody, width: 330, height: 430, x: innerWidth - 380, y: 300 });
-  buildParams(paramsBody, harness);
+  buildParams(paramsBody, harness, { onThumbWidth: applyThumbWidth, loras });
 
   // -------------------------------------------------------------- preview
   let previewMesh: THREE.Mesh | null = null;
@@ -321,6 +408,20 @@ async function boot(): Promise<void> {
       if (entry.id === 'create') createInput.focus();
     });
     dock.append(button);
+  }
+
+  async function deleteSelected(): Promise<void> {
+    if (!selected) return;
+    const { nodeId, semantic } = selected;
+    harness.removeAsset(nodeId);
+    clearOutline();
+    selected = null;
+    updateCreateMode();
+    await saveWorldState();
+    map3dView.refresh();
+    refreshLibrary();
+    log(`删除 ${semantic}`);
+    toast(`已删除 ${semantic}`, 'success');
   }
 
   async function submitCreate(): Promise<void> {
@@ -446,6 +547,7 @@ async function boot(): Promise<void> {
       toast('录制中…', 'info');
       return;
     }
+    const recordedMs = harness.recorder.durationMs;
     const segments: Segment[] = harness.stopRecording();
     hud.classList.remove('on');
     const url = await stopCapture();
@@ -455,12 +557,33 @@ async function boot(): Promise<void> {
       void video.play();
       renderWindow.show();
     }
+
+    // Upload the blockout recording so the model gets a real <Video 1>.
+    const blob = new Blob(recorderChunks, { type: 'video/webm' });
+    if (blob.size > 0 && harness.video.uploadSource) {
+      const uploadId = `src_${Date.now().toString(36)}`;
+      try {
+        await harness.video.uploadSource(uploadId, blob);
+        harness.setBlockout({ uploadId, fps: 24, durationMs: Math.round(recordedMs) });
+        log(`blockout 已上传 ${(blob.size / 1024 / 1024).toFixed(1)} MB`);
+      } catch (error) {
+        log(`blockout 上传失败：${(error as Error).message}`);
+      }
+    }
+
     log(`录制结束 · ${segments.length} 段`);
     toast(`录制结束 · ${segments.length} 段`, 'success');
     queue.enqueue(segments);
     const jobs = await queue.drain();
+    harness.setBlockout(undefined);
     for (const job of jobs) {
       log(`clip ${job.segment.clipId} ${job.status}${job.result?.meta.degraded ? ` · ${job.result.meta.degraded}` : ''}`);
+      if (job.result?.video) {
+        video.src = `${SERVICE_URL}/clips/${job.segment.clipId}/video`;
+        renderBody.classList.add('has-clip');
+        renderWindow.show();
+        void video.play().catch(() => undefined);
+      }
     }
     syncDock();
   }
@@ -578,6 +701,9 @@ async function boot(): Promise<void> {
         windows.toggle('library');
         if (windows.isOpen('library')) refreshLibrary();
         break;
+      case 'Delete':
+        if (selected) void deleteSelected();
+        break;
       case 'KeyO':
         windows.toggle('stats');
         break;
@@ -627,6 +753,7 @@ async function boot(): Promise<void> {
   // ----------------------------------------------------------------- loop
   const clock = new THREE.Clock();
   let lastStats = 0;
+  let thumbTick = 0;
 
   function animate(): void {
     requestAnimationFrame(animate);
@@ -661,6 +788,9 @@ async function boot(): Promise<void> {
       previewLayer.visible = false;
       captureRenderer.render(scene, camera);
       previewLayer.visible = true;
+      thumbTick += 1;
+      // 4 fps of reference frames: enough for memory and tail handoff.
+      if (thumbTick % 6 === 0) harness.recorder.annotateLast(captureThumbnail());
     }
 
     if (outline) outline.update();
@@ -696,6 +826,7 @@ async function boot(): Promise<void> {
 
   animate();
   log(`${bootNote} · chunks ${world.chunks.active().length} · ${harness.video.name}`);
+  for (const message of bootMessages) log(message);
   const query = new URLSearchParams(location.search);
   const selectParam = query.get('select');
   if (selectParam) {
@@ -727,7 +858,11 @@ function addLights(): void {
   scene.add(windowGlow);
 }
 
-function buildParams(root: HTMLElement, harness: Harness): void {
+function buildParams(
+  root: HTMLElement,
+  harness: Harness,
+  options: { onThumbWidth: (width: number) => void; loras: { id: string; label: string }[] },
+): void {
   const params = harness.renderParams;
 
   const row = (label: string, control: HTMLElement, value?: HTMLElement): void => {
@@ -793,9 +928,25 @@ function buildParams(root: HTMLElement, harness: Harness): void {
   };
 
   toggle('超分 1080p', params.upscale, (on) => harness.setParams({ upscale: on }));
-  toggle('8 步蒸馏 LoRA', params.loras.length > 0, (on) =>
-    harness.setParams({ loras: on ? [{ id: 'h3-distill-8step', weight: 1 }] : [] }),
-  );
+
+  // LoRA list comes from the video service (/config); empty means "none installed".
+  const enabledLoras = new Set<string>();
+  if (options.loras.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'row';
+    empty.innerHTML = '<label>LoRA</label><span class="v">未安装</span>';
+    root.append(empty);
+  } else {
+    for (const lora of options.loras) {
+      toggle(`LoRA · ${lora.label}`, false, (on) => {
+        if (on) enabledLoras.add(lora.id);
+        else enabledLoras.delete(lora.id);
+        harness.setParams({ loras: [...enabledLoras].map((id) => ({ id, weight: 1 })) });
+      });
+    }
+  }
+
+  slider('缩略图宽', 512, 160, 1024, 32, (value) => options.onThumbWidth(value));
 
   slider('切段重叠', harness.overlapFrames, 0, 96, 1, (value) => harness.setOverlapFrames(value));
   slider('记忆采样', harness.sampleStride, 1, 24, 1, (value) => harness.setSampleStride(value));

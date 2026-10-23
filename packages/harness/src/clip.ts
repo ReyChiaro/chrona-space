@@ -31,6 +31,7 @@ export interface AssembleOptions {
   previous?: Segment;
   /** Frames of the previous segment's tail, if the renderer captured images. */
   previousTail?: ImageRef[];
+  blockout?: ClipRequest['blockout'];
 }
 
 /**
@@ -76,6 +77,7 @@ export function assembleClipRequest(
             tailSeconds: options.previousTail.length / options.spec.fps,
           }
         : undefined,
+    blockout: options.blockout,
     style: { stylePresetId: 'film-neutral' },
     profileId: options.profileId,
     params: options.params,

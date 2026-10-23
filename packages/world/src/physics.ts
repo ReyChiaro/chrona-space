@@ -42,7 +42,7 @@ export class PhysicsWorld {
     size: number,
     heights: Float32Array,
     resolution: number,
-  ): void {
+  ): number {
     const body = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.fixed().setTranslation(origin.x + size / 2, origin.y, origin.z + size / 2),
     );
@@ -53,6 +53,7 @@ export class PhysicsWorld {
     });
     this.world.createCollider(desc, body);
     this.dirty = true;
+    return body.handle;
   }
 
   /** Attach colliders for an asset instance; returns the body handle. */

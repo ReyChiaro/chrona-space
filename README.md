@@ -63,6 +63,7 @@ pnpm build          # 构建 WebUI
 | `H` / `L` / `P` | 键位 / 日志 / 参数 |
 | `M` / `N` | 3D 地图 / 2D 地图（2D 地图点击传送） |
 | `C` / `B` / `O` | 创作 / 素材库 / 状态 |
+| `Delete` | 删除选中物体 |
 | `Esc` | 关闭最近打开的窗口 |
 
 窗口都可以拖动标题栏移动、右下角拖拽缩放；右上角 `✕` 或再按一次快捷键关闭。
@@ -76,8 +77,13 @@ pnpm build          # 构建 WebUI
 
 ## 配置
 
-复制 `.env.example` 为 `.env`。v1 不读取它：真实接入时把 Code Agent 换成 `ApiCodeAgent`，
-视频服务换成真实 adapter 即可。权重不下载到本地，服务器上按部署路径挂载。
+复制 `.env.example` 为 `.env`。视频服务读取它：
+
+- `CHRONA_VIDEO_ADAPTER=h3` + `CHRONA_MODEL_PATH` 加载本地权重，`CHRONA_LORA_DIR` 自动发现 LoRA。
+- `CHRONA_AGENT_*` 给 Code Agent（OpenAI 兼容 + tool calling），由服务端代理，浏览器不持 key。
+- `CHRONA_PROMPT_*` 给提示词增强（独立 key）。
+
+完整步骤与排错见 [docs/v1/RUNBOOK.md](docs/v1/RUNBOOK.md)。权重不下载到本地，服务器上按路径挂载。
 
 ## 已知边界
 

@@ -1,5 +1,12 @@
-export { StubCodeAgent, ApiCodeAgent } from './agent.js';
-export type { CodeAgent } from './agent.js';
+export {
+  StubCodeAgent,
+  ApiCodeAgent,
+  OpenAITransport,
+  ProxyTransport,
+  buildAgentSystemPrompt,
+  parseJsonReply,
+} from './agent.js';
+export type { CodeAgent, ChatMessage, ChatTransport, ToolCall, ToolHost, ToolSpec } from './agent.js';
 export { HttpVideoGenerator, OfflineVideoGenerator, createVideoGenerator } from './videoClient.js';
 export type { VideoGenerator } from './videoClient.js';
 export { ROOM_ITEMS, ROOM_BOUNDS } from './room.js';

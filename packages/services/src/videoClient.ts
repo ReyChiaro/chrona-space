@@ -5,6 +5,8 @@ export interface VideoGenerator {
   probe(): Promise<boolean>;
   profiles(): Promise<ModelProfile[]>;
   generate(request: ClipRequest): Promise<ClipResult>;
+  /** Upload the blockout recording used as <Video 1>. Optional for offline. */
+  uploadSource?(uploadId: string, blob: Blob): Promise<void>;
 }
 
 const DEFAULT_PROFILE: ModelProfile = {
@@ -52,7 +54,42 @@ export class HttpVideoGenerator implements VideoGenerator {
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`generate failed: ${response.status}`);
-    return (await response.json()) as ClipResult;
+    const { jobId } = (await response.json()) as { jobId: string };
+    return this.waitForJob(jobId);
+  }
+
+  /** Long-running generation: the service owns the GPU, we poll. */
+  private async waitForJob(jobId: string): Promise<ClipResult> {
+    const deadline = Date.now() + 30 * 60_000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      const response = await fetch(`${this.baseUrl}/jobs/${jobId}`);
+      if (!response.ok) throw new Error(`job ${jobId} not found`);
+      const job = (await response.json()) as {
+        status: string;
+        result?: ClipResult;
+        error?: string;
+      };
+      if (job.status === 'done' && job.result) return job.result;
+      if (job.status === 'failed') throw new Error(job.error ?? 'generation failed');
+    }
+    throw new Error(`job ${jobId} timed out`);
+  }
+
+  async uploadSource(uploadId: string, blob: Blob): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/clips/${uploadId}/source`, {
+      method: 'PUT',
+      headers: { 'content-type': blob.type || 'video/webm' },
+      body: blob,
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!response.ok) throw new Error(`upload failed: ${response.status}`);
+  }
+
+  async config(): Promise<{ agentEnabled: boolean; loras: { id: string; label: string }[] }> {
+    const response = await fetch(`${this.baseUrl}/config`);
+    if (!response.ok) throw new Error(`config failed: ${response.status}`);
+    return (await response.json()) as { agentEnabled: boolean; loras: { id: string; label: string }[] };
   }
 }
 

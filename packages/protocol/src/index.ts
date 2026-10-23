@@ -279,6 +279,8 @@ export interface ClipRequest {
   objectRefs: ObjectRef[];
   viewpointHistory: { cell: ViewpointCell; images: ImageRef[]; kinds: ('first' | 'latest')[] }[];
   prevClip?: { clipId: ClipId; tailFrames: ImageRef[]; tailSeconds: number };
+  /** Blockout recording uploaded to the video service, used as <Video 1>. */
+  blockout?: { uploadId: string; fps: number; durationMs: number };
   style: { stylePresetId: string };
   profileId: string;
   params: RenderParams;

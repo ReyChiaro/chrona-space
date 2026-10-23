@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import math
 
+import httpx
+
 from .schemas import ClipRequest, Frame
 
 MOTION_LABELS = {
@@ -113,3 +115,35 @@ def compose_prompt(request: ClipRequest) -> tuple[str, str]:
 
     lines.append("【禁止】不要改变物体位置、数量和尺度；不要添加画面中不存在的主要物体。")
     return "\n".join(lines), motion
+
+
+async def enhance_prompt(prompt: str, settings) -> str:
+    """Optional prompt enhancement through a second API; no-op when unconfigured."""
+    if not settings.prompt_enhance_enabled:
+        return prompt
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{settings.prompt_base_url.rstrip('/')}/chat/completions",
+                headers={"authorization": f"Bearer {settings.prompt_api_key}"},
+                json={
+                    "model": settings.prompt_model,
+                    "temperature": 0.3,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Rewrite the prompt for a video model. Keep every factual "
+                                "constraint, keep the reference tags (<Picture n>, <Video n>), "
+                                "add no new objects. Answer with the prompt only."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                },
+            )
+        if response.status_code >= 400:
+            return prompt
+        return response.json()["choices"][0]["message"]["content"].strip() or prompt
+    except Exception:  # noqa: BLE001 - enhancement is best-effort
+        return prompt

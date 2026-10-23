@@ -14,7 +14,15 @@ import { FsArchive, FsWorldStore } from '@chrona/storage/fs';
 import { ViewpointMemory } from '@chrona/storage';
 import { PhysicsWorld, World } from '@chrona/world';
 import { ClipQueue, Harness } from '@chrona/harness';
-import { ROOM_ITEMS, StubCodeAgent, createVideoGenerator, OfflineVideoGenerator } from '@chrona/services';
+import {
+  ApiCodeAgent,
+  OfflineVideoGenerator,
+  OpenAITransport,
+  ROOM_ITEMS,
+  StubCodeAgent,
+  createVideoGenerator,
+  type CodeAgent,
+} from '@chrona/services';
 
 interface PathFile {
   name: string;
@@ -57,15 +65,33 @@ async function main(): Promise<void> {
     ? new OfflineVideoGenerator('--offline')
     : await createVideoGenerator(values.service as string);
 
+  let agentRef: CodeAgent = new StubCodeAgent();
   const harness = new Harness({
     worldId,
     world,
     archive,
-    agent: new StubCodeAgent(),
+    agent: {
+      get name() {
+        return agentRef.name;
+      },
+      createAsset: (request) => agentRef.createAsset(request),
+      createTerrainEdit: (request) => agentRef.createTerrainEdit(request),
+    },
     video,
     memory,
     store,
   });
+
+  if (process.env.CHRONA_AGENT_BASE_URL && process.env.CHRONA_AGENT_API_KEY) {
+    agentRef = new ApiCodeAgent(
+      new OpenAITransport(
+        process.env.CHRONA_AGENT_BASE_URL,
+        process.env.CHRONA_AGENT_API_KEY,
+        process.env.CHRONA_AGENT_MODEL ?? 'gpt-4o',
+      ),
+      harness.createToolHost(),
+    );
+  }
 
   const log = (message: string) => {
     if (!values.quiet) console.log(message);
@@ -73,6 +99,7 @@ async function main(): Promise<void> {
 
   log(`world      ${worldId}  seed=${world.terrain.config.seed}`);
   log(`video      ${video.name}`);
+  log(`agent      ${agentRef.name}`);
 
   const outcomes = await harness.seedRoom(ROOM_ITEMS);
   log(`assets     ${outcomes.length} bound, ${outcomes.filter((o) => o.validation.ok).length} valid`);

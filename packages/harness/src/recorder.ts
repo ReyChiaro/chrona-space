@@ -1,4 +1,4 @@
-import type { ClipEvent, ClipEventKind, ClipSpec, FramePacket } from '@chrona/protocol';
+import type { ClipEvent, ClipEventKind, ClipSpec, FramePacket, ImageRef } from '@chrona/protocol';
 import type { World } from '@chrona/world';
 
 export interface RecordedSession {
@@ -60,6 +60,15 @@ export class Recorder {
       this.frames.push(this.world.frame());
       this.accumulator -= FRAME_MS;
     }
+  }
+
+  /**
+   * Attach a captured thumbnail to the newest frame. Called by the renderer
+   * after the capture pass, so memory and refs finally have pixels.
+   */
+  annotateLast(image: ImageRef): void {
+    const frame = this.frames.at(-1);
+    if (frame && !frame.rgb) frame.rgb = image;
   }
 
   event(kind: ClipEventKind, summary: string, chunkId?: string): void {

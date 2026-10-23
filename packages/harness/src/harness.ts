@@ -15,7 +15,7 @@ import { TerrainField, type World } from '@chrona/world';
 import { assembleClipRequest, DEFAULT_CLIP_SPEC, DEFAULT_RENDER_PARAMS } from './clip.js';
 import { Recorder, segmentSession, type Segment } from './recorder.js';
 import { validateBundle, type ValidationResult } from './validation.js';
-import type { CodeAgent } from '@chrona/services';
+import type { CodeAgent, ToolHost, ToolSpec } from '@chrona/services';
 import type { VideoGenerator } from '@chrona/services';
 
 export interface HarnessOptions {
@@ -64,6 +64,7 @@ export class Harness {
   private paramsValue: RenderParams;
   private overlapValue: number;
   private sampleStrideValue = 8;
+  private blockout: ClipRequest['blockout'];
   private readonly captureFrame?: HarnessOptions['captureFrame'];
 
   private editSeq = 0;
@@ -113,6 +114,11 @@ export class Harness {
 
   setSampleStride(stride: number): void {
     this.sampleStrideValue = Math.max(1, Math.round(stride));
+  }
+
+  /** Attach the uploaded blockout recording to subsequent requests. */
+  setBlockout(blockout: ClipRequest['blockout'] | undefined): void {
+    this.blockout = blockout;
   }
 
   /** Create (or modify) one asset from natural language. */
@@ -235,23 +241,139 @@ export class Harness {
 
   /** Commit a previewed edit. Bumps scene versions so memory goes stale. */
   async commitTerrain(preview: TerrainPreview): Promise<TerrainEdit> {
+    const edit = await this.applyTerrainDraft(preview.draft, preview.affectedChunks);
+    return edit;
+  }
+
+  /** Apply a draft directly (agent tool path). */
+  async applyTerrainDraft(draft: TerrainEditDraft, chunks?: string[]): Promise<TerrainEdit> {
     this.editSeq += 1;
     const edit: TerrainEdit = {
       editId: `edit_${String(this.editSeq).padStart(4, '0')}`,
       seq: this.editSeq,
-      op: preview.draft.op,
-      shape: preview.draft.shape,
-      strength: preview.draft.strength,
-      material: preview.draft.material,
-      targetChunkIds: preview.affectedChunks,
+      op: draft.op,
+      shape: draft.shape,
+      strength: draft.strength,
+      material: draft.material,
+      targetChunkIds: chunks ?? TerrainField.affectedChunks(draft, this.world.chunks.size),
       createdAt: new Date().toISOString(),
       author: 'user',
     };
     this.world.terrain.addEdit(edit);
-    for (const chunkId of preview.affectedChunks) this.world.chunks.markDirty(chunkId);
-    this.recorder.event('terrain', preview.draft.reason ?? `terrain ${edit.op}`);
+    for (const chunkId of edit.targetChunkIds) this.world.chunks.markDirty(chunkId);
+    this.recorder.event('terrain', draft.reason ?? `terrain ${edit.op}`);
     await this.persistTerrain();
     return edit;
+  }
+
+  /** Remove a node (and its colliders) from the world. */
+  removeAsset(nodeId: string): void {
+    this.world.removeNode(nodeId);
+  }
+
+  /**
+   * Tools the Code Agent may call. They run locally — the remote model only
+   * decides when and with what arguments (P1 tool loop).
+   */
+  createToolHost(): ToolHost {
+    const specs: ToolSpec[] = [
+      {
+        type: 'function',
+        function: {
+          name: 'scene_snapshot',
+          description: 'Return the current focus objects and camera state.',
+          parameters: { type: 'object', properties: {}, additionalProperties: false },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'terrain_sample',
+          description: 'Sample terrain height and surface class at a world position.',
+          parameters: {
+            type: 'object',
+            properties: { x: { type: 'number' }, z: { type: 'number' } },
+            required: ['x', 'z'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'asset_validate',
+          description: 'Validate an AssetBundle before writing it.',
+          parameters: {
+            type: 'object',
+            properties: { bundle: { type: 'object' } },
+            required: ['bundle'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'asset_write',
+          description: 'Persist and bind an AssetBundle into the world.',
+          parameters: {
+            type: 'object',
+            properties: {
+              bundle: { type: 'object' },
+              position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+              rotationY: { type: 'number' },
+            },
+            required: ['bundle'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'terrain_commit',
+          description: 'Apply a TerrainEditDraft. Harness handles preview/WAL semantics.',
+          parameters: {
+            type: 'object',
+            properties: { draft: { type: 'object' } },
+            required: ['draft'],
+          },
+        },
+      },
+    ];
+
+    return {
+      specs,
+      call: async (name, args) => {
+        switch (name) {
+          case 'scene_snapshot':
+            return this.world.snapshot();
+          case 'terrain_sample': {
+            const x = Number(args.x ?? 0);
+            const z = Number(args.z ?? 0);
+            return { height: this.world.terrain.heightAt(x, z), surface: this.world.terrain.surfaceAt(x, z) };
+          }
+          case 'asset_validate':
+            return validateBundle(args.bundle as AssetBundle);
+          case 'asset_write': {
+            const bundle = args.bundle as AssetBundle;
+            const validation = validateBundle(bundle);
+            if (!validation.ok) return { ok: false, errors: validation.errors };
+            const pos = Array.isArray(args.position) ? args.position : [0, 0, 0];
+            await this.archive.put(bundle);
+            const nodeId = this.world.bindAsset(
+              bundle,
+              { x: Number(pos[0] ?? 0), y: Number(pos[1] ?? 0), z: Number(pos[2] ?? 0) },
+              Number(args.rotationY ?? 0),
+            );
+            return { ok: true, nodeId };
+          }
+          case 'terrain_commit': {
+            const edit = await this.applyTerrainDraft(args.draft as TerrainEditDraft);
+            return { ok: true, editId: edit.editId, chunks: edit.targetChunkIds };
+          }
+          default:
+            throw new Error(`unknown tool: ${name}`);
+        }
+      },
+    };
   }
 
   private async persistTerrain(): Promise<void> {
@@ -286,6 +408,12 @@ export class Harness {
       spec: this.spec,
       params: this.paramsValue,
       previous,
+      blockout: this.blockout,
+      // Last 2 s of the previous clip, if the renderer captured pixels.
+      previousTail: previous?.frames
+        .slice(-this.spec.fps * 2)
+        .map((frame) => frame.rgb)
+        .filter((image): image is NonNullable<typeof image> => Boolean(image)),
     });
   }
 
